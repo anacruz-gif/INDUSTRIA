@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TUVN - Control de Cargas (DS18B20)</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+
+  <style>
+    body { font-family: 'Orbitron', sans-serif; background:#232426; color:#d7d7d7; margin:0; }
+    .industrial-header { background: linear-gradient(90deg,#0f1011,#17181a); border-bottom:4px solid #b28b1f; }
+    .sensor-card { background: linear-gradient(145deg,#33363a,#1f2022); border:1px solid #505357; border-radius:12px; padding:18px; transition:transform .25s,box-shadow .25s; box-shadow: 0 6px 20px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.02); }
+    .sensor-card:hover { transform: translateY(-6px); box-shadow: 0 10px 28px rgba(0,0,0,0.7); }
+    .value-text { font-size:2.4rem; font-weight:700; color:#e8e8e8; }
+    .value-label { color:#9aa0a6; }
+    .devs { position:fixed; right:18px; bottom:18px; background:linear-gradient(180deg,#101214,#1a1c1d); border:1px solid #3b3b3b; padding:8px 12px; border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,0.6); color:#cbbf7a; font-size:0.9rem; }
+    #chartAvg { width:100%; height:320px; border-radius:10px; background:linear-gradient(180deg,#121214,#151617); border:1px solid #333436; }
+    .connect-btn { background: linear-gradient(180deg,#e6c33a,#c9a227); color:#061015; border-radius:10px; padding:10px 14px; font-weight:700; display:flex; gap:10px; align-items:center; }
+    .gauge { width:100%; height:180px; margin:0 auto; }
+    .controls { display:flex; gap:10px; align-items:center; }
+    .mode-select { background:#111; color:#fff; border:1px solid #444; padding:8px 10px; border-radius:8px; }
+    .btn-toggle { padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:700; }
+    .btn-on { background:#16a34a; color:#061015; }
+    .btn-off { background:#374151; color:#e2e8f0; }
+    .indicator { width:12px; height:12px; border-radius:50%; display:inline-block; margin-left:8px; vertical-align:middle; }
+    .ind-on { background:#16a34a; box-shadow:0 0 6px rgba(22,163,74,0.5); }
+    .ind-off { background:#374151; }
+    .small-muted { color:#9aa0a6; font-size:0.85rem; }
+    .hidden { display:none !important; }
+  </style>
+</head>
+<body>
+  <!-- HEADER -->
+  <header class="industrial-header py-4 shadow-lg">
+    <div class="container mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-4">
+        <div class="bg-[#b28b1f] p-3 rounded-md shadow-inner"><i data-lucide="factory" class="w-8 h-8 text-black"></i></div>
+        <div>
+          <h1 class="text-3xl font-bold">TUVN</h1>
+          <p class="text-xs text-[#d1b85f] tracking-widest">SISTEMA INDUSTRIAL DE MONITOREO TÉRMICO</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <!-- Mode menu -->
+        <div class="controls">
+          <label class="small-muted mr-2">Modo</label>
+          <select id="modeSelect" class="mode-select">
+            <option value="auto">Automático</option>
+            <option value="manual">Manual</option>
+          </select>
+        </div>
+
+        <!-- Manual controls -->
+        <div class="controls" id="manualControls">
+          <div>
+            <button id="heaterBtn" class="btn-toggle btn-off">Calentador</button>
+            <span id="heaterInd" class="indicator ind-off"></span>
+          </div>
+          <div>
+            <button id="fanBtn" class="btn-toggle btn-off">Ventilador</button>
+            <span id="fanInd" class="indicator ind-off"></span>
+          </div>
+        </div>
+
+        <!-- Status & connect -->
+        <div class="flex items-center gap-4">
+          <div class="flex items-center gap-3 bg-black/30 px-3 py-2 rounded-md border border-[#444]">
+            <div class="relative flex h-3 w-3">
+              <span id="pingDot" class="hidden absolute inline-flex h-full w-full rounded-full bg-[#d1b85f] opacity-60"></span>
+              <span id="staticDot" class="relative inline-flex rounded-full h-3 w-3 bg-red-600"></span>
+            </div>
+            <span id="statusText" class="text-sm font-mono text-red-300">DESCONECTADO</span>
+          </div>
+
+          <button id="connectBtn" class="connect-btn" onclick="toggleConnection()">
+            <i data-lucide="bluetooth" class="w-5 h-5"></i>
+            <span id="connectLabel">CONECTAR</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Top info -->
+  <div class="container mx-auto px-4 mt-6">
+    <div class="flex flex-col md:flex-row items-center justify-between gap-4">
+      <div class="text-gray-300"><p class="text-sm">MONITOREO ZONA INDUSTRIAL 1 · DS18B20 · OneWire</p></div>
+      <div class="font-mono text-sm text-[#cbbf7a]" id="clockTop">--/--/---- --:--:--</div>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <main class="container mx-auto px-4 py-8">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="col-span-1 space-y-6">
+        <!-- Sensors (gauges from before) -->
+        <div class="sensor-card">
+          <div class="flex items-center justify-between"><h3 class="text-yellow-300 font-bold">SENSOR 1</h3><i data-lucide="thermometer" class="w-5 h-5 text-gray-300"></i></div>
+          <div id="g1" class="gauge"></div>
+          <div class="text-center mt-4"><div id="val1" class="value-text">--</div><div class="value-label mt-2">°C</div></div>
+        </div>
+
+        <div class="sensor-card">
+          <div class="flex items-center justify-between"><h3 class="text-yellow-300 font-bold">SENSOR 2</h3><i data-lucide="thermometer" class="w-5 h-5 text-gray-300"></i></div>
+          <div id="g2" class="gauge"></div>
+          <div class="text-center mt-4"><div id="val2" class="value-text">--</div><div class="value-label mt-2">°C</div></div>
+        </div>
+
+        <div class="sensor-card">
+          <div class="flex items-center justify-between"><h3 class="text-yellow-300 font-bold">SENSOR 3</h3><i data-lucide="thermometer" class="w-5 h-5 text-gray-300"></i></div>
+          <div id="g3" class="gauge"></div>
+          <div class="text-center mt-4"><div id="val3" class="value-text">--</div><div class="value-label mt-2">°C</div></div>
+        </div>
+
+        <div class="sensor-card">
+          <div class="flex items-center justify-between"><h3 class="text-yellow-300 font-bold">SENSOR 4</h3><i data-lucide="thermometer" class="w-5 h-5 text-gray-300"></i></div>
+          <div id="g4" class="gauge"></div>
+          <div class="text-center mt-4"><div id="val4" class="value-text">--</div><div class="value-label mt-2">°C</div></div>
+        </div>
+      </div>
+
+      <div class="col-span-1 lg:col-span-2">
+        <div class="sensor-card">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-yellow-300 text-xl font-bold">Temperatura Promedio</h3>
+            <div id="avgNow" class="text-3xl font-bold text-gray-100">-- °C</div>
+          </div>
+          <div id="chartAvg"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="devs">Integrantes: <strong class="text-white">DAVID CUNUHAY, WALTER DAQUILEMA, ANA CRUZ</strong>, <strong class="text-white">Miguel Ruiz</strong></div>
+
+  <footer class="text-center text-gray-500 py-4 mt-6">©️ 2025 Instituto Superior Tecnológico Vida Nueva</footer>
+
+  <!-- SCRIPT: lógica completa -->
+  <script>
+  (function(){
+    // Safety wrapper to avoid blank page from errors
+    try {
+      lucide.createIcons();
+
+      // Clock
+      function updateClock(){
+        const now = new Date();
+        const opt = { weekday: 'short', year:'numeric', month:'short', day:'numeric' };
+        document.getElementById('clockTop').textContent = now.toLocaleDateString('es-EC', opt) + '  ' + now.toLocaleTimeString('es-EC');
+      }
+      setInterval(updateClock,1000); updateClock();
+
+      // Color helpers
+      function lerpColor(a,b,t){ /* same as earlier */ const ah=a.replace('#',''), bh=b.replace('#',''); const ar=parseInt(ah.substring(0,2),16), ag=parseInt(ah.substring(2,4),16), ab=parseInt(ah.substring(4,6),16); const br=parseInt(bh.substring(0,2),16), bg=parseInt(bh.substring(2,4),16), bb=parseInt(bh.substring(4,6),16); const rr=Math.round(ar+(br-ar)*t), rg=Math.round(ag+(bg-ag)*t), rb=Math.round(ab+(bb-ab)*t); return '#'+rr.toString(16).padStart(2,'0')+rg.toString(16).padStart(2,'0')+rb.toString(16).padStart(2,'0'); }
+      function tempColor(temp){ const t=Math.max(0,Math.min(50,temp)); if(t<=18) return lerpColor('#2b9cff','#32d1c9',t/18); if(t<=25) return lerpColor('#32d1c9','#7fff00',(t-18)/(25-18)); if(t<=35) return lerpColor('#7fff00','#ff9f1c',(t-25)/(35-25)); return lerpColor('#ff9f1c','#ff2e2e',(t-35)/(50-35)); }
+
+      // ECharts gauges
+      const g1 = echarts.init(document.getElementById('g1'));
+      const g2 = echarts.init(document.getElementById('g2'));
+      const g3 = echarts.init(document.getElementById('g3'));
+      const g4 = echarts.init(document.getElementById('g4'));
+
+      function gaugeOption(value,color){ return { backgroundColor:'transparent', series:[{ type:'gauge', startAngle:210, endAngle:-30, min:0, max:50, splitNumber:5, axisLine:{ lineStyle:{ width:14, color:[[1, new echarts.graphic.LinearGradient(0,0,1,0,[{offset:0,color:'#2e2f30'},{offset:1,color:color}])]] } }, axisLabel:{show:false}, axisTick:{show:false}, splitLine:{length:8,lineStyle:{color:'#777'}}, pointer:{ icon:'path://M2 0 L-2 0 L0 -70 Z', length:'70%', width:6, itemStyle:{color:color} }, anchor:{show:true,size:12,itemStyle:{color:'#ccc',borderColor:'#888',borderWidth:2}}, detail:{show:false}, data:[{value:value}] }] } }
+
+      [g1,g2,g3,g4].forEach(g=>g.setOption(gaugeOption(0,'#999')));
+
+      // Average chart
+      const avgChart = echarts.init(document.getElementById('chartAvg'));
+      const MAX_POINTS = 60;
+      let times=[], values=[];
+      avgChart.setOption({ backgroundColor:'transparent', tooltip:{trigger:'axis'}, xAxis:{type:'category',boundaryGap:false,data:times,axisLabel:{color:'#ccc'},axisLine:{lineStyle:{color:'#777'}}}, yAxis:{type:'value',axisLabel:{color:'#ccc'},splitLine:{lineStyle:{color:'#333'}}}, series:[{name:'Promedio',type:'line',smooth:true,symbol:'none',lineStyle:{width:3,color:'#7fff00'},areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(127,255,0,0.35)'},{offset:1,color:'rgba(127,255,0,0.02)'}])}, data:values}] });
+
+      function pushAverage(avg){
+        const label=new Date().toLocaleTimeString();
+        if(times.length>=MAX_POINTS){ times.shift(); values.shift(); }
+        times.push(label); values.push(Number(avg.toFixed(2)));
+        const c=tempColor(avg);
+        avgChart.setOption({ xAxis:{data:times}, series:[{ data: values, lineStyle:{ color:c }, areaStyle:{ color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:c+'66'},{offset:1,color:c+'05'}]) } }] });
+      }
+
+      // BLE config
+      const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+      const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+      let device=null, characteristic=null;
+      const statusText=document.getElementById('statusText'), connectLabel=document.getElementById('connectLabel');
+      const staticDot=document.getElementById('staticDot'), pingDot=document.getElementById('pingDot');
+      const val1=document.getElementById('val1'), val2=document.getElementById('val2'), val3=document.getElementById('val3'), val4=document.getElementById('val4');
+      const avgNow=document.getElementById('avgNow');
+
+      // Control UI elements
+      const modeSelect = document.getElementById('modeSelect');
+      const manualControls = document.getElementById('manualControls');
+      const heaterBtn = document.getElementById('heaterBtn');
+      const fanBtn = document.getElementById('fanBtn');
+      const heaterInd = document.getElementById('heaterInd');
+      const fanInd = document.getElementById('fanInd');
+
+      // State mirrored on web
+      let webMode='auto'; // auto | manual
+      let webHeater = 0; // 0 off, 1 on
+      let webFan = 0;
+
+      // Initialize manual controls state (disabled on auto)
+      function updateManualUI(){
+        if(webMode === 'manual'){
+          manualControls.querySelectorAll('button').forEach(b => b.disabled = false);
+          manualControls.classList.remove('opacity-50');
+        } else {
+          manualControls.querySelectorAll('button').forEach(b => b.disabled = true);
+          manualControls.classList.add('opacity-50');
+        }
+        heaterInd.className = 'indicator ' + (webHeater ? 'ind-on' : 'ind-off');
+        fanInd.className = 'indicator ' + (webFan ? 'ind-on' : 'ind-off');
+        heaterBtn.className = 'btn-toggle ' + (webHeater ? 'btn-on' : 'btn-off');
+        fanBtn.className = 'btn-toggle ' + (webFan ? 'btn-on' : 'btn-off');
+      }
+      updateManualUI();
+
+      // Send JSON command helper
+      async function sendCommandJSON(obj){
+        if(!characteristic) {
+          console.warn('BLE not connected - cannot send command');
+          return;
+        }
+        try {
+          const s = JSON.stringify(obj);
+          const enc = new TextEncoder();
+          await characteristic.writeValue(enc.encode(s));
+          console.log('Command sent:', s);
+        } catch(e){
+          console.error('Write error:', e);
+        }
+      }
+
+      // Events: mode change
+      modeSelect.addEventListener('change', async (e)=>{
+        webMode = e.target.value;
+        // send {"mode":"auto"} or {"mode":"manual","heater":x,"fan":y}
+        if(webMode === 'auto'){
+          await sendCommandJSON({mode:'auto'});
+        } else {
+          await sendCommandJSON({mode:'manual','heater': webHeater, 'fan': webFan});
+        }
+        updateManualUI();
+      });
+
+      // Manual toggle handlers
+      heaterBtn.addEventListener('click', async ()=>{
+        if(webMode !== 'manual') return;
+        webHeater = webHeater ? 0 : 1;
+        await sendCommandJSON({mode:'manual','heater':webHeater,'fan':webFan});
+        updateManualUI();
+      });
+
+      fanBtn.addEventListener('click', async ()=>{
+        if(webMode !== 'manual') return;
+        webFan = webFan ? 0 : 1;
+        await sendCommandJSON({mode:'manual','heater':webHeater,'fan':webFan});
+        updateManualUI();
+      });
+
+      // Expose toggleConnection for button
+      window.toggleConnection = async function toggleConnection(){
+        try {
+          if(device && device.gatt && device.gatt.connected){
+            device.gatt.disconnect();
+            updateUIDisconnected();
+            return;
+          }
+          await connectBLE();
+        } catch(e){ console.error(e); updateUIDisconnected(); }
+      };
+
+      async function connectBLE(){
+        try {
+          connectLabel.textContent = 'BUSCANDO...';
+          device = await navigator.bluetooth.requestDevice({ filters:[{ name:'TUVN_Termometros' }], optionalServices:[SERVICE_UUID] });
+          device.addEventListener('gattserverdisconnected', ()=> updateUIDisconnected());
+          const server = await device.gatt.connect();
+          const service = await server.getPrimaryService(SERVICE_UUID);
+          characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+          // start notifications (ESP32 will notify sensor + state packets)
+          await characteristic.startNotifications();
+          characteristic.addEventListener('characteristicvaluechanged', handleNotification);
+
+          // Allow writes on same characteristic
+          // keep reference to characteristic for writeValue in sendCommandJSON
+
+          updateUIConnected();
+        } catch(err){
+          console.error('BLE connect error:', err);
+          updateUIDisconnected();
+        }
+      }
+
+      // UI updates on connected/disconnected
+      function updateUIConnected(){
+        connectLabel.textContent = 'DESCONECTAR';
+        statusText.textContent = 'CONECTADO';
+        statusText.classList.remove('text-red-300'); statusText.classList.add('text-green-300');
+        staticDot.classList.replace('bg-red-600','bg-green-500');
+        pingDot.classList.remove('hidden');
+        setTimeout(()=>pingDot.classList.add('hidden'),400);
+      }
+      function updateUIDisconnected(){
+        connectLabel.textContent = 'CONECTAR';
+        statusText.textContent = 'DESCONECTADO';
+        statusText.classList.remove('text-green-300'); statusText.classList.add('text-red-300');
+        staticDot.classList.replace('bg-green-500','bg-red-600');
+        // reset values
+        val1.textContent='--'; val2.textContent='--'; val3.textContent='--'; val4.textContent='--';
+        avgNow.textContent='-- °C';
+        [g1,g2,g3,g4].forEach(g=>g.setOption(gaugeOption(0,'#999')));
+      }
+
+      // Handle notifications from ESP32 (JSON)
+      function handleNotification(evt){
+        try {
+          const txt = new TextDecoder().decode(evt.target.value);
+          // console.log('RX:', txt);
+          const data = JSON.parse(txt);
+
+          // sensors
+          const temps=[];
+          if(data.s1 !== undefined && !isNaN(data.s1)){ const v=Number(data.s1); val1.textContent = v.toFixed(2); temps.push(v); g1.setOption(gaugeOption(v, tempColor(v))); }
+          if(data.s2 !== undefined && !isNaN(data.s2)){ const v=Number(data.s2); val2.textContent = v.toFixed(2); temps.push(v); g2.setOption(gaugeOption(v, tempColor(v))); }
+          if(data.s3 !== undefined && !isNaN(data.s3)){ const v=Number(data.s3); val3.textContent = v.toFixed(2); temps.push(v); g3.setOption(gaugeOption(v, tempColor(v))); }
+          if(data.s4 !== undefined && !isNaN(data.s4)){ const v=Number(data.s4); val4.textContent = v.toFixed(2); temps.push(v); g4.setOption(gaugeOption(v, tempColor(v))); }
+
+          // avg
+          if(data.avg !== undefined && !isNaN(data.avg)){ const a=Number(data.avg); avgNow.textContent = a.toFixed(2) + ' °C'; pushAverage(a); }
+
+          // mode & outputs (OPTION A: ESP32 sends mode/heater/fan in every packet)
+          if(data.mode !== undefined){ webMode = data.mode; modeSelect.value = webMode; }
+          if(data.heater !== undefined){ webHeater = Number(data.heater); }
+          if(data.fan !== undefined){ webFan = Number(data.fan); }
+          updateManualUI();
+
+          // ping visual
+          pingDot.classList.remove('hidden');
+          setTimeout(()=> pingDot.classList.add('hidden'), 350);
+
+        } catch(e){
+          console.warn('Notification parse error:', e);
+        }
+      }
+
+      // gaugeOption accessible here (reuse from earlier)
+      function gaugeOption(value,color){ return { backgroundColor:'transparent', series:[{ type:'gauge', startAngle:210, endAngle:-30, min:0, max:50, splitNumber:5, axisLine: { lineStyle: { width:14, color:[[1, new echarts.graphic.LinearGradient(0,0,1,0,[{offset:0,color:'#2e2f30'},{offset:1,color:color}])]] } }, axisLabel:{show:false}, axisTick:{show:false}, splitLine:{length:8,lineStyle:{color:'#777'}}, pointer:{ icon:'path://M2 0 L-2 0 L0 -70 Z', length:'70%', width:6, itemStyle:{color:color} }, anchor:{show:true,size:12,itemStyle:{color:'#ccc',borderColor:'#888',borderWidth:2}}, detail:{show:false}, data:[{value:value}] }] } }
+
+      // resize charts on window resize
+      window.addEventListener('resize', ()=>{ try{ g1.resize(); g2.resize(); g3.resize(); g4.resize(); avgChart.resize(); }catch(e){} });
+
+      // init UI
+      updateManualUI();
+      updateUIDisconnected();
+
+    } catch (err) {
+      console.error('UI init error', err);
+      document.body.innerHTML = '<pre style="color:#fff;background:#000;padding:20px;">Error al iniciar UI: ' + (err && err.stack ? err.stack : String(err)) + '</pre>';
+    }
+  })();
+  </script>
+</body>
+</html>
